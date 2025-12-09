@@ -32,6 +32,7 @@ class OkiAdpcmDecoder:
         if nibble & 8: self.predicted_sample -= diff
         else: self.predicted_sample += diff
 
+        # Clip to 12-bit
         if self.predicted_sample > 2047: self.predicted_sample = 2047
         elif self.predicted_sample < -2048: self.predicted_sample = -2048
 
@@ -39,35 +40,59 @@ class OkiAdpcmDecoder:
 
 def convert_file(input_path, output_path, sample_rate):
     try:
+        # ファイルサイズチェック
+        if os.path.getsize(input_path) == 0:
+            print(f"[SKIP] 空のファイルです: {input_path}")
+            return False
+
         with open(input_path, 'rb') as f:
             raw_data = f.read()
+            
     except Exception as e:
         print(f"[ERROR] 読み込み失敗: {input_path} -> {e}")
         return False
 
-    # ヘッダー検出とスキップ処理 (Z-MUSIC "ZmAdpCm")
+    # --- ヘッダー判定ロジック ---
     start_offset = 0
-    if raw_data.startswith(b'ZmAdpCm'):
-        # 固定32バイトスキップ (多くのZPDで有効)
-        start_offset = 32
+    header_signature = b'ZmAdpCm'
     
+    # 最初の数バイトを確認
+    if raw_data.startswith(header_signature):
+        # 標準的なZ-MUSICヘッダーがある場合
+        start_offset = 32
+        print(f"[INFO] Header detected (Z-MUSIC): {os.path.basename(input_path)}")
+    else:
+        # ヘッダーがない場合はRawデータとみなす
+        start_offset = 0
+        print(f"[INFO] No Header (Assuming Raw): {os.path.basename(input_path)}")
+
     adpcm_data = raw_data[start_offset:]
+    
+    if len(adpcm_data) == 0:
+        print(f"[SKIP] データ部がありません: {input_path}")
+        return False
+
     decoder = OkiAdpcmDecoder()
     pcm_samples = []
 
+    # デコード処理
     for byte in adpcm_data:
         high = (byte >> 4) & 0x0F
         low = byte & 0x0F
-        pcm_samples.append(struct.pack('<h', decoder.decode_nibble(high)))
-        pcm_samples.append(struct.pack('<h', decoder.decode_nibble(low)))
+        try:
+            pcm_samples.append(struct.pack('<h', decoder.decode_nibble(high)))
+            pcm_samples.append(struct.pack('<h', decoder.decode_nibble(low)))
+        except Exception as e:
+            print(f"[WARN] デコード中にエラー発生 (一部欠損の可能性): {e}")
+            break
 
+    # WAV書き出し
     try:
         with wave.open(output_path, 'w') as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(sample_rate)
             wav.writeframes(b''.join(pcm_samples))
-        print(f"[OK] 変換完了: {output_path}")
         return True
     except Exception as e:
         print(f"[ERROR] 書き込み失敗: {output_path} -> {e}")
@@ -75,28 +100,40 @@ def convert_file(input_path, output_path, sample_rate):
 
 def main():
     parser = argparse.ArgumentParser(description="X68000 ZPD to WAV Batch Converter")
-    parser.add_argument('--input_dir', default='./zpd_files', help='Input directory containing .ZPD files')
-    parser.add_argument('--output_dir', default='./output_wavs', help='Output directory for .wav files')
+    parser.add_argument('--input_dir', default='./zpd_files', help='Input directory')
+    parser.add_argument('--output_dir', default='./output_wavs', help='Output directory')
     parser.add_argument('--rate', type=int, default=15625, help='Sampling rate (default: 15625)')
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    # 大文字小文字を区別せずZPDファイルを検索
-    files = glob.glob(os.path.join(args.input_dir, '*.[zZ][pP][dD]'))
+    # globを使って安全にファイルリストを取得（特殊文字を含むファイル名もここで吸収）
+    # 大文字小文字の拡張子に対応
+    pattern = os.path.join(args.input_dir, '*.[zZ][pP][dD]')
+    files = glob.glob(pattern)
     
     if not files:
         print(f"警告: '{args.input_dir}' にZPDファイルが見つかりません。")
         return
 
-    print(f"--- 変換開始: {len(files)} ファイル ---")
+    print(f"--- 変換開始: 対象 {len(files)} ファイル ---")
+    
+    success_count = 0
     for file_path in files:
+        # ファイル名取得（ディレクトリ除く）
         file_name = os.path.basename(file_path)
+        # 拡張子を除去して .wav を付与
         base_name, _ = os.path.splitext(file_name)
         output_path = os.path.join(args.output_dir, base_name + ".wav")
-        convert_file(file_path, output_path, args.rate)
-    print("--- 全処理終了 ---")
+        
+        if convert_file(file_path, output_path, args.rate):
+            print(f"[OK] {file_name} -> {os.path.basename(output_path)}")
+            success_count += 1
+        else:
+            print(f"[FAIL] {file_name}")
+
+    print(f"--- 完了: {success_count}/{len(files)} 成功 ---")
 
 if __name__ == "__main__":
     main()
