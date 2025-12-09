@@ -1,19 +1,17 @@
 name: ZPD Audio Extractor
 
 on:
-  # ファイルがpushされたら実行
   push:
     paths:
       - 'zpd_files/**'
       - 'converter.py'
       - '.github/workflows/**'
-  # GitHubの画面から手動実行も可能にする設定
   workflow_dispatch:
 
 jobs:
   convert_audio:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: リポジトリのチェックアウト
         uses: actions/checkout@v3
@@ -23,15 +21,21 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: フォルダの確認
+        run: |
+          ls -R zpd_files || echo "zpd_files not found"
+
       - name: 変換スクリプトの実行
-        # input_dirにzpd_filesを指定、output_dirにoutput_wavsを指定
+        # ファイル名の展開はPython内部で行うため、引数にはフォルダパスのみ渡します。
+        # これにより "tom&je.ZPD" のような特殊文字も安全に処理されます。
         run: |
           mkdir -p output_wavs
-          python converter.py --input_dir ./zpd_files --output_dir ./output_wavs
+          python converter.py --input_dir "./zpd_files" --output_dir "./output_wavs"
 
       - name: 変換結果（WAV）をアーティファクトとしてアップロード
         uses: actions/upload-artifact@v4
         with:
           name: converted-wav-files
           path: output_wavs/*.wav
+          if-no-files-found: warn
           retention-days: 5
